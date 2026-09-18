@@ -7,12 +7,12 @@ finish-args:
   - --share=ipc
   - --socket=wayland
   - --socket=x11  # Required for X11 mode and active window monitoring
-  - --socket=session-bus  # Required for DBus access
+  - --talk-name=org.gnome.Mutter.RemoteDesktop
   - --device=dri # GPU/DRI access for WebKit rendering
   - --env=LIBGL_ALWAYS_SOFTWARE=1 #force software rendering if GPU fails
 
   # Force X11 mode for reliable background clipboard monitoring (Wayland has sandbox limitations)
-  - --env=GDK_BACKEND=x11
+  - --env=GDK_BACKEND=x11,wayland
 
   # network access for clips to retrieve basic info on URLs
   - --share=network
@@ -50,86 +50,42 @@ finish-args:
   - --talk-name=org.freedesktop.FileManager1
 
   # AT-SPI accessibility bus for active window detection
+  - --talk-name=org.a11y.Bus
   - --filesystem=xdg-run/at-spi:ro
 
 modules:
-  - name: chardet
-    buildsystem: simple
-    build-options:
-      build-args:
-        - --share=network
-    build-commands:
-      - "pip3 install --prefix=${FLATPAK_DEST} chardet"
-
-  - name: requests
-    buildsystem: simple
-    build-options:
-      build-args:
-        - --share=network
-    build-commands:
-      - "pip3 install --prefix=${FLATPAK_DEST} requests"
-
-  - name: python-keyring
-    buildsystem: simple
-    build-options:
-      build-args:
-        - --share=network
-    build-commands:
-      - "pip3 install --prefix=${FLATPAK_DEST} keyring"
-
-  - name: python-xlib
-    buildsystem: simple
-    build-options:
-      build-args:
-        - --share=network
-    build-commands:
-      - "pip3 install --prefix=${FLATPAK_DEST} python-xlib"
-
-  - name: pynput
-    buildsystem: simple
-    build-options:
-      build-args:
-        - --share=network
-    build-commands:
-      - "pip3 install --prefix=${FLATPAK_DEST} pynput"
-
-  - name: weasyprint
-    buildsystem: simple
-    build-options:
-      build-args:
-        - --share=network
-    build-commands:
-      - "pip3 install --prefix=${FLATPAK_DEST} weasyprint pymupdf"
+  - build-aux/python-dependencies.json
 
   - name: libx11-dev
     buildsystem: autotools
     sources:
       - type: archive
-        url: http://archive.ubuntu.com/ubuntu/pool/main/libx/libx11/libx11_1.6.9.orig.tar.gz
+        url: https://archive.ubuntu.com/ubuntu/pool/main/libx/libx11/libx11_1.6.9.orig.tar.gz
         sha256: b8c0930a9b25de15f3d773288cacd5e2f0a4158e194935615c52aeceafd1107b
   - name: libxmu-headers
     buildsystem: autotools
     sources:
       - type: archive
-        url: http://archive.ubuntu.com/ubuntu/pool/main/libx/libxmu/libxmu_1.1.3.orig.tar.gz
+        url: https://archive.ubuntu.com/ubuntu/pool/main/libx/libxmu/libxmu_1.1.3.orig.tar.gz
         sha256: 5bd9d4ed1ceaac9ea023d86bf1c1632cd3b172dce4a193a72a94e1d9df87a62e
   - name: libxt-dev
     buildsystem: autotools
     sources:
       - type: archive
-        url: http://archive.ubuntu.com/ubuntu/pool/main/libx/libxt/libxt_1.1.5.orig.tar.gz
+        url: https://archive.ubuntu.com/ubuntu/pool/main/libx/libxt/libxt_1.1.5.orig.tar.gz
         sha256: b59bee38a9935565fa49dc1bfe84cb30173e2e07e1dcdf801430d4b54eb0caa3
   - name: libxmu-dev
     buildsystem: autotools
     sources:
       - type: archive
-        url: http://archive.ubuntu.com/ubuntu/pool/main/libx/libxmu/libxmu_1.1.3.orig.tar.gz
+        url: https://archive.ubuntu.com/ubuntu/pool/main/libx/libxmu/libxmu_1.1.3.orig.tar.gz
         sha256: 5bd9d4ed1ceaac9ea023d86bf1c1632cd3b172dce4a193a72a94e1d9df87a62e
   - name: xclip
     buildsystem: autotools
     sources:
       - type: git
         url: https://github.com/astrand/xclip.git
+        commit: 2c3b811002b35d3be7f39cc1145dd06bdb32e31c
 
   - name: wl-clipboard
     buildsystem: meson
@@ -139,12 +95,7 @@ modules:
     sources:
       - type: git
         url: https://github.com/bugaevc/wl-clipboard.git
-
-  - name: wtype
-    buildsystem: meson
-    sources:
-      - type: git
-        url: https://github.com/atx/wtype.git
+        commit: 3eb912c274042cd5deed6b478b39908a12f37498
 
   - name: libpwquality
     sources:
@@ -156,6 +107,12 @@ modules:
 
   - name: clips
     buildsystem: meson
+    run-tests: true
     sources:
       - type: dir
         path: .
+        skip:
+          - .git
+          - build
+          - build-dir
+          - .flatpak-builder

@@ -54,6 +54,9 @@ flatpak-builder --user --force-clean --install build-dir com.github.hezral.clips
 ```
 
 ### Build using meson 
+See [development and compatibility notes](docs/development.md) for isolated
+desktop tests and the Wayland Quick Paste backends.
+
 Ensure you have these dependencies installed
 
 * python3
