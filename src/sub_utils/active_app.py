@@ -97,7 +97,12 @@ def get_active_appinfo(data=None, app=None):
     else:
         if app and hasattr(app, 'logger'):
             app.logger.debug("get_active_appinfo: Falling back to X11 method")
-        return _get_active_appinfo_xlib(data)
+        try:
+            return _get_active_appinfo_xlib(data)
+        except Exception as error:
+            if app and hasattr(app, 'logger'):
+                app.logger.debug("Source application lookup unavailable: %s", error)
+            return "Unknown", "application-default-icon"
 
 @log_function_calls
 def _get_active_appinfo_xlib(data=None):
@@ -221,6 +226,8 @@ def _get_active_appinfo_xlib(data=None):
     except Xlib.error.XError: #simplify dealing with BadWindow
         source_app = None
         source_icon = None
+    finally:
+        display.close()
 
     return source_app, source_icon
 

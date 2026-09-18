@@ -92,7 +92,9 @@ class CacheManager():
     def _setup_gtk_monitoring(self):
 
         """Setup GTK clipboard owner-change monitoring."""
-        self.clipboard_manager.clipboard.connect(
+        if self.clipboard_monitoring:
+            return
+        self._clipboard_handler = self.clipboard_manager.clipboard.connect(
             "owner-change", 
             self.update_cache, 
             self.clipboard_manager
@@ -132,7 +134,8 @@ class CacheManager():
         
         # Disconnect GTK signal
         try:
-            self.clipboard_manager.clipboard.disconnect_by_func(self.update_cache)
+            self.clipboard_manager.clipboard.disconnect(self._clipboard_handler)
+            self._clipboard_handler = None
             self.app.logger.debug("Disconnected GTK clipboard signal")
         except Exception as e:
             self.app.logger.debug(f"GTK disconnect: {e}")
@@ -330,7 +333,8 @@ class CacheManager():
             if manual_run is False:
                 self.check_total_clips()
                 
-            self.main_window.update_total_clips_label("delete", count)
+            if self.main_window is not None:
+                self.main_window.update_total_clips_label("delete", count)
         else:
             print("No records found for auto housekeeping")
 
@@ -338,8 +342,9 @@ class CacheManager():
 
         last_run = datetime.now()
         last_run_short = datetime.strftime(last_run, '%a, %d %B %Y, %-I:%M:%S %p')
-        run_autohousekeeping= self.app.utils.get_widget_by_name(widget=self.main_window.settings_view, child_name="run-housekeeping-now", level=0)
-        run_autohousekeeping.sublabel_text.props.label = last_run_short
+        if self.main_window is not None:
+            run_autohousekeeping = self.app.utils.get_widget_by_name(widget=self.main_window.settings_view, child_name="run-housekeeping-now", level=0)
+            run_autohousekeeping.sublabel_text.props.label = last_run_short
 
     @log_function_calls
     def select_record(self, id):

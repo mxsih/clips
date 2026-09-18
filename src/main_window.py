@@ -54,7 +54,7 @@ class ClipsWindow(Gtk.ApplicationWindow):
         self.get_style_context().add_class("rounded")
         self.set_main_window_size()
         self.add(self.main_view)
-        self.show_all()
+        self.main_view.show_all()
 
         self.connect("map", self.save_window_state)
         self.connect("delete-event", self.on_close_window)
@@ -163,6 +163,8 @@ class ClipsWindow(Gtk.ApplicationWindow):
     def on_close_window(self, window=None, event=None):
 
         self.save_window_state()
+        if event is not None:
+            self.app.quit()
         # print(event, self.app.gio_settings.get_int("pos-x"), self.app.gio_settings.get_int("pos-y"))
         return False
 
@@ -193,7 +195,7 @@ class ClipsWindow(Gtk.ApplicationWindow):
         if not self.gio_settings.get_value("persistent-mode"):
             self.app.logger.debug(f"Persistent Mode Check App Title: {app_title}")
             if app_title is not None:
-                if self.app.props.application_id not in app_title:
+                if app_title.casefold() not in ("clips", self.app.props.application_id.casefold()):
                     self.hide()
 
     @log_function_calls
@@ -474,5 +476,4 @@ class ClipsWindow(Gtk.ApplicationWindow):
         tooltip.set_custom(None)
         tooltip.set_custom(grid)
         return True
-
 

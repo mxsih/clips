@@ -13,7 +13,6 @@ excluded_targets = (Gdk.Atom.intern('TIMESTAMP', False),
                     Gdk.Atom.intern('MULTIPLE', False), 
                     Gdk.Atom.intern('SAVE_TARGETS', False), 
                     Gdk.Atom.intern('STRING', False), 
-                    Gdk.Atom.intern('UTF8_STRING', False), 
                     Gdk.Atom.intern('COMPOUND_TEXT', False), 
                     Gdk.Atom.intern('TEXT', False), )
 
@@ -51,6 +50,7 @@ uri_dolphin_target = ("text/uri-list", "uri", "Dolphin Format", "files", False)
 richtext_target = ("text/richtext", "rtf", "Rich Text Format", "richtext", False)
 utf8text_target = ("text/plain;charset=utf-8", "txt", "Plain Text Format", "plaintext", False)
 plaintext_target = ("text/plain", "txt", "Plain Text Format", "plaintext", False)
+legacy_utf8_target = ("UTF8_STRING", "txt", "Plain Text Format", "plaintext", False)
 
 # custom types, not a real clipboard data type
 url1_target = ("text/plain;charset=utf-8", "txt", "Internet URL", "url", True)
@@ -80,7 +80,8 @@ supported_targets = (spreadsheet_libreoffice_target,
                     mail1_target,
                     mail2_target,
                     utf8text_target, 
-                    plaintext_target, )
+                    plaintext_target,
+                    legacy_utf8_target, )
 
 def get_clipboard_contents(clipboard, event, save_files, app=None):
     try:

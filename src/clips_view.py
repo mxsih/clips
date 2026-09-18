@@ -709,78 +709,54 @@ class ClipsContainer(Gtk.EventBox):
 
         elif action == "copy":
             self.app.logger.debug(f"clips_view.py: Copy action triggered for type={self.type}, target={self.target}, id={self.id}")
-            copy_result = False
             temp_file_uri = ""
             title = "Copy Content"
             callback = self.on_authenticated
 
-            # Set flag to prevent clipboard monitoring from capturing our own copy operation
-            # This prevents the window from becoming unresponsive on Wayland
-            if hasattr(self.app, 'clipboard_manager'):
-                self.app.clipboard_manager._skip_clipboard_monitoring = True
-                self.app.logger.debug("Set _skip_clipboard_monitoring flag before copy")
+            generation = self.app.paste_controller.generation
+            def copied(success):
+                if success:
+                    action_notify_box.show_all()
+                    self.clip_action_notify_revealer.set_reveal_child(True)
+                    self.app.cache_manager.update_cache_on_recopy(self.cache_file)
+                    if generation == self.app.paste_controller.generation:
+                        self.quick_paste()
+                else:
+                    self.app.paste_controller.notify("Could not copy the selected item.")
 
             if "yes" in self.protected:
                 if validated:
                     decrypt, decrypted_data = self.app.utils.do_encryption("decrypt", data, self.cache_file)
                     if decrypt:
                         import tempfile
-                        temp_filename = next(tempfile._get_candidate_names()) + tempfile.gettempprefix()
-                        temp_file_uri = os.path.join(tempfile.gettempdir(), temp_filename)
-                        with open(temp_file_uri, 'wb') as file:
+                        with tempfile.NamedTemporaryFile(prefix="clips-", delete=False) as file:
+                            temp_file_uri = file.name
                             file.write(decrypted_data)
-                        copy_result = self.app.utils.copy_to_clipboard(self.target, temp_file_uri, self.type)
+                        try:
+                            self.app.clipboard_manager.writer.copy_file(self.target, temp_file_uri, self.type, copied)
+                        finally:
+                            os.unlink(temp_file_uri)
                 else:
                     self.authenticate_dialog = self.on_authenticate(title, action, callback)
-                    # Clear flag if we're showing authentication dialog
-                    if hasattr(self.app, 'clipboard_manager'):
-                        self.app.clipboard_manager._skip_clipboard_monitoring = False
             else:
-               copy_result = self.app.utils.copy_to_clipboard(self.target, self.cache_file, self.type)
-
-            # Clear flag after a short delay
-            if hasattr(self.app, 'clipboard_manager'):
-                def clear_flag():
-                    self.app.clipboard_manager._skip_clipboard_monitoring = False
-                    self.app.logger.debug("Cleared _skip_clipboard_monitoring flag after copy")
-                    return False
-                GLib.timeout_add(500, clear_flag)  # 500ms delay
-
-            self.app.logger.debug(f"clips_view.py: Copy action completed, result={copy_result}")
-
-            if copy_result:
-                action_notify_box.show_all()
-                self.clip_action_notify_revealer.set_reveal_child(True)
-                self.app.cache_manager.update_cache_on_recopy(self.cache_file)
-                if "yes" in self.protected:
-                    os.remove(temp_file_uri)
-                self.quick_paste()
+                self.app.clipboard_manager.writer.copy_file(self.target, self.cache_file, self.type, copied)
 
         elif action == "copy-plaintext":
             alt_target = "text/plain;charset=utf-8"
             alt_type = "text"
             alt_cache_file = self.cache_file.replace("html", "txt")
 
-            # Set flag to prevent clipboard monitoring from capturing our own copy operation
-            if hasattr(self.app, 'clipboard_manager'):
-                self.app.clipboard_manager._skip_clipboard_monitoring = True
-                self.app.logger.debug("Set _skip_clipboard_monitoring flag before copy-plaintext")
-
-            copy_result = self.app.utils.copy_to_clipboard(alt_target, alt_cache_file, alt_type)
-
-            # Clear flag after a short delay
-            if hasattr(self.app, 'clipboard_manager'):
-                def clear_flag():
-                    self.app.clipboard_manager._skip_clipboard_monitoring = False
-                    self.app.logger.debug("Cleared _skip_clipboard_monitoring flag after copy-plaintext")
-                    return False
-                GLib.timeout_add(500, clear_flag)  # 500ms delay
-
-            if copy_result:
-                action_notify_box.show_all()
-                self.clip_action_notify_revealer.set_reveal_child(True)
-                self.app.cache_manager.update_cache_on_recopy(self.cache_file)
-                self.quick_paste()
+            generation = self.app.paste_controller.generation
+            def copied(success):
+                if success:
+                    action_notify_box.show_all()
+                    self.clip_action_notify_revealer.set_reveal_child(True)
+                    self.app.cache_manager.update_cache_on_recopy(self.cache_file)
+                    if generation == self.app.paste_controller.generation:
+                        self.quick_paste()
+                else:
+                    self.app.paste_controller.notify("Could not copy the selected item.")
+            self.app.clipboard_manager.writer.copy_file(alt_target, alt_cache_file, alt_type, copied)
 
         elif action == "force_delete" or (isinstance(action, tuple) and action[0] == "force_delete"):
             current_flowbox_index = flowboxchild.get_index() - 1
@@ -821,31 +797,7 @@ class ClipsContainer(Gtk.EventBox):
             self.app.main_window.update_total_clips_label("delete")
 
     def quick_paste(self):
-        """
-        Quickly paste clipboard contents to the previously active window.
-        
-        On X11: Can explicitly set the active window before pasting.
-        On Wayland: Cannot control window focus due to security model.
-                   The paste goes to whatever window receives focus after
-                   Clips hides (usually the previously focused window).
-        """
-        from .sub_utils.display_backend import is_wayland
-        
-        def paste(data=None):
-            if not is_wayland():
-                try:
-                    self.app.utils.set_active_window_by_xwindow(
-                        self.app.utils.get_active_window_xlib()
-                    )
-                except Exception as e:
-                    self.app.logger.debug(f"X11 window activation: {e}")
-            self.app.utils.paste_from_clipboard(self.app)
-            self.app.on_clipsapp_action()
-
-        if self.app.gio_settings.get_value("quick-paste"):
-            self.app.main_window.hide()
-            self.app.on_clipsapp_action()
-            GLib.timeout_add(100, paste, None)
+        self.app.paste_controller.paste()
 
     def update_timestamp_on_clips(self, dt):
         self.created = dt

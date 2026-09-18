@@ -1,16 +1,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # SPDX-FileCopyrightText: 2023 Adi Hezral <hezral@gmail.com>
 
-"""
-Universal active window manager using AT-SPI accessibility bus.
-Works on both X11 and Wayland sessions.
-Requires --no-a11y-bus flag when running in flatpak.
+"""Track application focus through the desktop AT-SPI accessibility bus."""
 
-This implementation uses event-driven approach (no polling) by subscribing
-to AT-SPI DBus signals for window focus and activation events.
-"""
-
-import sys
+import os
 from typing import Dict, Optional, Callable
 
 import gi
@@ -47,7 +40,7 @@ class ActiveWindowManager():
                 GLib.Variant("(ss)", (interface, prop_name)),
                 GLib.VariantType("(v)"),
                 Gio.DBusCallFlags.NONE,
-                -1,
+                1000,
                 None
             )
             return ret.get_child_value(0).get_variant().unpack()
@@ -117,12 +110,17 @@ class ActiveWindowManager():
 
         try:
             # A. Connect to Session Bus to find AT-SPI
-            session_bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
-            reply = session_bus.call_sync(
-                "org.a11y.Bus", "/org/a11y/bus", "org.a11y.Bus", "GetAddress", None,
-                GLib.VariantType("(s)"), Gio.DBusCallFlags.NONE, -1, None
-            )
-            atspi_address = reply.unpack()[0]
+            try:
+                session_bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+                reply = session_bus.call_sync(
+                    "org.a11y.Bus", "/org/a11y/bus", "org.a11y.Bus", "GetAddress", None,
+                    GLib.VariantType("(s)"), Gio.DBusCallFlags.NONE, 1000, None
+                )
+                atspi_address = reply.unpack()[0]
+            except GLib.Error:
+                atspi_address = os.environ.get("AT_SPI_BUS_ADDRESS")
+                if not atspi_address:
+                    raise
             
             if self.app:
                 self.app.logger.info(f"Found AT-SPI bus at: {atspi_address}")
@@ -154,14 +152,14 @@ class ActiveWindowManager():
                 # 1. Register Object Focus
                 self.atspi_conn.call_sync(
                     "org.a11y.atspi.Registry", "/org/a11y/atspi/registry", "org.a11y.atspi.Registry", 
-                    "RegisterEvent", GLib.Variant("(s)", ("object:state-changed:focused",)), 
-                    None, Gio.DBusCallFlags.NONE, -1, None
+                    "RegisterEvent", GLib.Variant("(sass)", ("object:state-changed:focused", [], "")),
+                    None, Gio.DBusCallFlags.NONE, 1000, None
                 )
                 # 2. Register Window Activate
                 self.atspi_conn.call_sync(
                     "org.a11y.atspi.Registry", "/org/a11y/atspi/registry", "org.a11y.atspi.Registry", 
-                    "RegisterEvent", GLib.Variant("(s)", ("window:activate",)), 
-                    None, Gio.DBusCallFlags.NONE, -1, None
+                    "RegisterEvent", GLib.Variant("(sass)", ("window:activate", [], "")),
+                    None, Gio.DBusCallFlags.NONE, 1000, None
                 )
                 
                 if self.app:
@@ -170,6 +168,9 @@ class ActiveWindowManager():
             except Exception as e:
                 if self.app:
                     self.app.logger.warning(f"Failed to register events: {e}")
+                self.atspi_conn.close_sync(None)
+                self.atspi_conn = None
+                return
 
             # D. Subscribe to signals
             self.atspi_conn.signal_subscribe(

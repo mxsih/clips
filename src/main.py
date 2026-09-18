@@ -23,7 +23,6 @@ from gi.repository import Gtk, Gio, GLib, Gdk, Granite
 from .main_window import ClipsWindow
 from .clipboard_manager import ClipboardManager
 from .cache_manager import CacheManager
-from .sub_utils.shake_listener import ShakeListener
 from . import utils
 from .utils import log_function_calls
 
@@ -31,6 +30,7 @@ from .utils import log_function_calls
 from .sub_utils.display_backend import is_wayland, get_backend_name
 from .active_window_manager import ActiveWindowManager
 from .sub_utils.filemanager_backend import FileManagerBackend
+from .sub_utils.paste import PasteController
 
 from datetime import datetime
 import time
@@ -56,6 +56,7 @@ class Application(Gtk.Application):
     @log_function_calls
     def __init__(self):
         super().__init__()
+        GLib.set_application_name("Clips")
 
         self.props.application_id = self.app_id
         self.props.flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE
@@ -88,16 +89,6 @@ class Application(Gtk.Application):
         else:
             self.logger.warning("WebKit2 not available (URL screenshots disabled)")
 
-        self.clipboard_manager = ClipboardManager(gtk_application=self)
-        self.cache_manager = CacheManager(gtk_application=self, clipboard_manager=self.clipboard_manager)
-        self.window_manager = ActiveWindowManager(gtk_application=self)
-        self.file_manager = FileManagerBackend(gtk_application=self)
-        
-        # Shake listener synchronization
-        self.gio_settings.connect("changed::shake-reveal", self.create_shakelistener)
-        self.gio_settings.connect("changed::shake-sensitivity", self.create_shakelistener)
-        self.create_shakelistener()
-
         # prepend custom path for icon theme
         self.icon_theme = Gtk.IconTheme.get_default()
         self.icon_theme.prepend_search_path("/run/host/usr/share/pixmaps")
@@ -120,10 +111,16 @@ class Application(Gtk.Application):
     @log_function_calls
     def do_startup(self):
         Gtk.Application.do_startup(self)
-
-        # Initialize clipboard monitoring after GTK display is ready
-        if hasattr(self, 'cache_manager') and self.cache_manager:
-            self.cache_manager.initialize_monitoring()
+        self.hold()
+        self.clipboard_manager = ClipboardManager(gtk_application=self)
+        self.cache_manager = CacheManager(gtk_application=self, clipboard_manager=self.clipboard_manager)
+        self.window_manager = ActiveWindowManager(gtk_application=self)
+        self.file_manager = FileManagerBackend(gtk_application=self)
+        self.paste_controller = PasteController(self)
+        self.gio_settings.connect("changed::shake-reveal", self.create_shakelistener)
+        self.gio_settings.connect("changed::shake-sensitivity", self.create_shakelistener)
+        self.create_shakelistener()
+        self.cache_manager.initialize_monitoring()
 
         # self.create_app_shortcut() # doesn't work in flatpak anymore
         self.create_app_actions()
@@ -143,11 +140,14 @@ class Application(Gtk.Application):
         if self.app_startup is True:
             if self.gio_settings.get_value("auto-housekeeping"):
                 self.logger.info("start auto-housekeeping")
-                self.logger.info("auto-retention-period", self.gio_settings.get_int("auto-retention-period"))
+                self.logger.info("auto-retention-period: %s", self.gio_settings.get_int("auto-retention-period"))
                 self.cache_manager.auto_housekeeping(self.gio_settings.get_int("auto-retention-period"))
 
     @log_function_calls
     def do_activate(self):
+        self.paste_controller.cancel()
+        if self.main_window is None or not self.main_window.is_visible():
+            self.paste_controller.remember_target()
         # no window
         if self.main_window is None:
             self.logger.info("no window: initializing window")
@@ -158,6 +158,7 @@ class Application(Gtk.Application):
                 self.logger.info("app startup: hide on startup enabled")
                 self.main_window.hide()
             else:
+                self.main_window.show_all()
                 self.main_window.present()
                 self.main_window.on_view_visible()
 
@@ -174,29 +175,14 @@ class Application(Gtk.Application):
 
         # window hidden
         else:
-            self.logger.info("window visible")
-
-            if self.main_window.is_visible():
-                self.main_window.hide()
-
-            else:
-                for window in self.get_windows():
-                    window.destroy()
-                self.main_window = None
-                self.do_activate()
+            self.main_window.show_all()
+            self.main_window.present()
+            self.main_window.on_view_visible()
 
     @utils.run_async
     @utils.metrics(logger=logger)
     @log_function_calls
     def load_clips_fromdb(self, clips):
-
-        def first_clip(clip): #load first clip to focus 
-            self.main_window.clips_view.new_clip(clip)
-            self.main_window.clips_view.flowbox.select_child(self.main_window.clips_view.flowbox.get_child_at_index(0))
-            self.main_window.clips_view.flowbox.get_child_at_index(0).grab_focus()
-
-        GLib.idle_add(first_clip, clips[-1])
-        time.sleep(0.01)
 
         for clip in reversed(clips[-25:]):
             GLib.idle_add(self.main_window.clips_view.new_clip, clip)
@@ -357,16 +343,23 @@ class Application(Gtk.Application):
             
     @log_function_calls
     def on_hide_action(self, action, param):
+        self.paste_controller.cancel()
         if self.main_window is not None:
             self.main_window.hide()
 
     @log_function_calls
     def on_quit_action(self, action, param):
-        if self.main_window is not None:
-            # Stop clipboard monitoring before quit (cleans up Wayland monitor thread)
-            if self.cache_manager:
-                self.cache_manager.stop_clipboard_monitoring()
-            self.main_window.destroy()
+        self.quit()
+
+    def do_shutdown(self):
+        self.paste_controller.close()
+        self.clipboard_manager.writer.close()
+        self.cache_manager.stop_clipboard_monitoring()
+        self.window_manager._stop()
+        if self.shake_listener is not None:
+            self.shake_listener.remove_listener()
+        self.release()
+        Gtk.Application.do_shutdown(self)
 
     @log_function_calls
     def on_text_mode(self, action=None, param=None):
@@ -419,12 +412,13 @@ class Application(Gtk.Application):
             return
 
         if self.shake_listener is None:
-            self.logger.info("Starting shake_listener")
-            self.shake_listener = ShakeListener(
-                app=self, 
-                reveal_callback=self.do_activate, 
-                sensitivity=sensitivity
-            )
+            try:
+                from .sub_utils.shake_listener import ShakeListener
+                self.shake_listener = ShakeListener(
+                    app=self, reveal_callback=self.do_activate, sensitivity=sensitivity
+                )
+            except Exception as error:
+                self.logger.warning("Shake detection unavailable: %s", error)
         else:
             # If shake-reveal was already ON, but maybe we need to refresh due to some reason
             self.shake_listener.update_sensitivity(sensitivity)

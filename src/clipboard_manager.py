@@ -9,6 +9,7 @@ from datetime import datetime
 
 from . import clips_supported
 from .utils import log_function_calls
+from .sub_utils.clipboard import ClipboardWriter
 
 
 class ClipboardManager():
@@ -20,9 +21,8 @@ class ClipboardManager():
         self.app = gtk_application
         self.clips_supported = clips_supported
         
-        self.events = []
-        self.proceed = True
         self._clipboard = None
+        self.writer = ClipboardWriter()
 
     @property
 
@@ -41,10 +41,6 @@ class ClipboardManager():
 
         return self.app.gio_settings.get_value(gio_settings_keyname).get_strv()
 
-    # =========================================================================
-    # Original X11 Methods (unchanged)
-    # =========================================================================
-
     @log_function_calls
     def clipboard_changed(self, clipboard, event, _wayland_data=None):
 
@@ -60,66 +56,28 @@ class ClipboardManager():
         
         self.app.logger.debug(f"clipboard_changed called with clipboard: {clipboard} and event: {event}")
 
-        event_id = None  # Initialize event_id
-
-        if event.reason is Gdk.OwnerChange.NEW_OWNER and event.owner is not None:
-            event_id = 0
-
-        if event.reason is Gdk.OwnerChange.NEW_OWNER and event.owner is None:
-            event_id = 1
-
-        if event.reason is Gdk.OwnerChange.DESTROY and event.owner is None:
-            event_id = 1
-
-        if event.reason is Gdk.OwnerChange.CLOSE and event.owner is None:
-            event_id = 1
-
-        self.app.logger.debug(f"Event: reason={event.reason}, owner={event.owner}, event_id={event_id}")
-
-        if len(self.events) == 0 and event_id == 0:
-            self.events.append(event_id)
-            self.proceed = True
-        elif len(self.events) == 1 and self.events[0] == 0 and event_id == 1:
-            self.events.append(event_id)
-            self.proceed = False
-        elif len(self.events) == 2 and self.events[0] == 0 and self.events[1] == 1 and event_id == 0:
-            self.events.append(event_id)
-            self.proceed = False
-        elif len(self.events) == 2 and self.events[0] == 0 and self.events[1] == 1 and event_id == 1:
-            self.events.append(event_id)
-            self.proceed = False
-        elif len(self.events) == 3 and self.events[0] == 0 and self.events[1] == 1 and self.events[2] == 1 and event_id == 0:
-            self.events = []
-            self.proceed = True
-        elif len(self.events) == 3 and self.events[0] == 0 and self.events[1] == 1 and self.events[2] == 0 and event_id == 0:
-            self.events = []
-            self.proceed = True
-
-        self.app.logger.debug(f"Event tracking: events={self.events}, proceed={self.proceed}")
+        if event.reason != Gdk.OwnerChange.NEW_OWNER:
+            return
 
         # exclude apps
         active_app, active_app_icon = self.app.utils.get_active_appinfo(app=self.app)
+        active_app = active_app or "Unknown"
+        active_app_icon = active_app_icon or "application-default-icon"
 
-        if active_app != "Clips":
-            if active_app not in self.get_settings("excluded-apps"):
-                if self.proceed:
-                    created = datetime.now()
-                    clipboard_contents = self.get_clipboard_contents(clipboard, event, active_app)
-                    if clipboard_contents is not None:
-                        target, content, thumbnail, file_extension, additional_desc, content_type, alt_content, alt_file_extension = clipboard_contents
-                        source_app = active_app
-                        source_icon = active_app_icon
-
-                        protected = "no"
-                        if self.app.gio_settings.get_value("protected-mode"):
-                            if source_app in self.get_settings("protected-apps"):
-                                protected = "yes"
-
-                        self.app.logger.debug(f"clipboard event captured: {self.events}, {active_app}")
-                        return target, content, source_app, source_icon, created, protected, thumbnail, file_extension, content_type, alt_content, alt_file_extension, additional_desc
-            else:
-                self.app.logger.debug(f"clipboard event ignored: {self.events}, {event_id}, {active_app}")
-                pass
+        if active_app == "Clips" or active_app in self.get_settings("excluded-apps"):
+            return
+        created = datetime.now()
+        clipboard_contents = self.get_clipboard_contents(clipboard, event, active_app)
+        if clipboard_contents is None:
+            return
+        target, content, thumbnail, file_extension, additional_desc, content_type, alt_content, alt_file_extension = clipboard_contents
+        data = content.get_data()
+        if data is None or self.writer.owns_content(data):
+            return
+        protected = "no"
+        if self.app.gio_settings.get_boolean("protected-mode") and active_app in self.get_settings("protected-apps"):
+            protected = "yes"
+        return target, content, active_app, active_app_icon, created, protected, thumbnail, file_extension, content_type, alt_content, alt_file_extension, additional_desc
 
     @log_function_calls
     def get_clipboard_contents(self, clipboard, event, active_app):
@@ -133,8 +91,11 @@ class ClipboardManager():
         alt_content = None
         alt_file_extension = None
 
-        for supported_target in self.clips_supported.supported_targets:   
-            for target in clipboard.wait_for_targets()[1]:
+        available, targets = clipboard.wait_for_targets()
+        if not available or targets is None:
+            return
+        for supported_target in self.clips_supported.supported_targets:
+            for target in targets:
                 # self.app.logger.debug(f"Processing target: {target}")
                 if target not in self.clips_supported.excluded_targets and supported_target[0] in str(target) and clip_saved is False:
                     proceed = True
