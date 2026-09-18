@@ -1,6 +1,6 @@
 # Local validation
 
-Test date: 2026-09-17. Host: elementary OS 8, Pantheon Wayland, x86_64.
+Test date: 2026-09-17. Host: elementary OS 8, Pantheon Wayland and X11, x86_64.
 Branch: `fix/wayland-x11-stability`, based on upstream `wayland` at
 `a12b9bbb2862918086811d53b4ad61c94c01fbc8`.
 
@@ -39,6 +39,22 @@ the final capture check. Subsequent 10-cycle runs exercise monitoring enabled
 throughout paste, including preference preservation, on the final app revision.
 Both passed, with unchanged worker and file-descriptor counts.
 
+## Real X11 login
+
+After the user logged into Pantheon X11, `loginctl` confirmed `Type=x11` and
+`Active=yes`. The same installed candidate passed 100 exact paste cycles into
+a GTK target on the real desktop with monitoring enabled. Hidden startup,
+100 activation/Escape cycles, clipboard format round-trips, protected-copy
+completion, housekeeping, and background capture passed. Workers remained 1
+and file descriptors remained 22. The process exited successfully.
+
+The normal stable instance was stopped during the isolated test and restarted
+afterward. The user's working launcher and enabled autostart still explicitly
+select `stable`; this does not validate candidate autostart at login or manual
+use of the candidate in other applications. The candidate was tested with
+disposable history/settings, without the ydotool socket. Detailed results are
+in ignored `build/desktop-x11-login.log`.
+
 Local logs are retained in ignored `build/`: `build.log`, `unit-tests.log`,
 `desktop-wayland.log`, `desktop-x11.log`, `desktop-wayland-enabled.log`, and
 `desktop-x11-enabled.log`. Xvfb's private bus produces host portal/keyring
@@ -49,8 +65,9 @@ path; the test checks socket type, not merely path existence.
 
 ## Remaining release gates
 
-- Real X11 login: GUI launch, existing autostart, Escape/reopen, clipboard
-  capture, and double-click paste into normal applications.
+- Candidate launch from the desktop launcher, actual login autostart, and
+  manual double-click paste into normal applications; the real X11 desktop
+  integration checks above passed, but stable remains the default installation.
 - Real GNOME/KDE portal permission and denial workflows.
 - Terminal application identification and actual terminal paste. The shortcut
   sequence itself has a unit test.
