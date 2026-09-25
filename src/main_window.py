@@ -62,6 +62,18 @@ class ClipsWindow(Gtk.ApplicationWindow):
         self.connect("destroy", self.on_close_window)
         self.connect("key-press-event", self.on_search_as_you_type)
 
+    def present(self):
+        timestamp = Gtk.get_current_event_time()
+        if not timestamp and self.get_display().__gtype__.name == "GdkX11Display":
+            gi.require_version('GdkX11', '3.0')
+            from gi.repository import GdkX11
+            self.realize()
+            window = self.get_window()
+            # The server-time round trip requires property-change events.
+            window.set_events(window.get_events() | Gdk.EventMask.PROPERTY_CHANGE_MASK)
+            timestamp = GdkX11.x11_get_server_time(window)
+        self.present_with_time(timestamp)
+
     @log_function_calls
     def set_display_settings(self, data):
 
@@ -476,4 +488,3 @@ class ClipsWindow(Gtk.ApplicationWindow):
         tooltip.set_custom(None)
         tooltip.set_custom(grid)
         return True
-

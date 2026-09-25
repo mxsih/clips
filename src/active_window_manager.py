@@ -10,7 +10,7 @@ import gi
 gi.require_version('GLib', '2.0')
 gi.require_version('Gio', '2.0')
 from gi.repository import GLib, Gio
-from .utils import log_function_calls
+from .sub_utils.logging_utils import log_function_calls
 
 
 
@@ -26,13 +26,25 @@ class ActiveWindowManager():
         self.atspi_conn = None
         self.main_loop = None
         self._initialized = False  # Track if manager has been started
+        self._focus_request = None
+        self._focus_generation = 0
         
     @log_function_calls
-    def _get_property(self, connection, destination, path, interface, prop_name):
+    def _get_property(self, connection, destination, path, interface, prop_name, cancellable, callback):
 
-        """Helper to read properties using raw Gio DBus calls."""
-        try:
-            ret = connection.call_sync(
+        """Keep focus queries off the UI thread, including queries to ourselves."""
+        def finished(bus, result):
+            try:
+                ret = bus.call_finish(result)
+                value = ret.get_child_value(0).get_variant().unpack()
+            except GLib.Error as error:
+                if self.app and not cancellable.is_cancelled():
+                    self.app.logger.debug("Error getting property %s: %s", prop_name, error)
+                value = None
+            if not cancellable.is_cancelled():
+                callback(value)
+
+        connection.call(
                 destination,
                 path,
                 "org.freedesktop.DBus.Properties",
@@ -41,13 +53,8 @@ class ActiveWindowManager():
                 GLib.VariantType("(v)"),
                 Gio.DBusCallFlags.NONE,
                 1000,
-                None
+                cancellable, finished
             )
-            return ret.get_child_value(0).get_variant().unpack()
-        except Exception as e:
-            if self.app:
-                self.app.logger.debug(f"Error getting property {prop_name}: {e}")
-            return None
 
     @log_function_calls
     def _on_signal(self, connection, sender_name, object_path, interface_name, signal_name, parameters, user_data):
@@ -63,41 +70,33 @@ class ActiveWindowManager():
         if not (is_focused or is_activate):
             return
 
-        try:
-            # A. Identify the App (Jump to Root)
-            # This is the most reliable way to get the App Name
-            app_root_path = "/org/a11y/atspi/accessible/root"
-            app_name = self._get_property(connection, sender_name, app_root_path, "org.a11y.atspi.Accessible", "Name")
-            
-            # Fallback: Try ToolkitName if Name is empty
-            if not app_name:
-                app_name = self._get_property(connection, sender_name, app_root_path, "org.a11y.atspi.Application", "ToolkitName")
+        self._focus_generation += 1
+        generation = self._focus_generation
+        if self._focus_request is not None:
+            self._focus_request.cancel()
+        request = self._focus_request = Gio.Cancellable()
+        root = "/org/a11y/atspi/accessible/root"
 
-            # If this is a Window:Activate event, but we couldn't find a valid name,
-            # we IGNORE it. This allows the Object:StateChanged event (which happens 
-            # simultaneously) to handle it instead.
-            if is_activate and (not app_name or app_name == ""):
-                return 
-                
-            # B. Identify the Element (Window Title or Widget Name)
-            element_name = self._get_property(connection, sender_name, object_path, "org.a11y.atspi.Accessible", "Name")
-
-            # Cleanup strings for display
-            display_app = app_name if app_name and app_name != "" else f"Unknown app ({sender_name})"
-            display_element = element_name if element_name and element_name != "" else "Untitled"
-
-            # Always update and trigger callback
-            self.last_seen['title'] = display_app
-            
+        def resolved(name):
+            if generation != self._focus_generation or request.is_cancelled():
+                return
+            self._focus_request = None
+            if not name:
+                return
+            self.last_seen['title'] = name
             if self.app:
-                self.app.logger.debug(f"Active app changed to: {display_app} - {display_element}")
-            
-            # Trigger the callback
+                self.app.logger.debug("Active app changed to: %s", name)
             self.handle_change(self.last_seen)
 
-        except Exception as e:
-            if self.app:
-                self.app.logger.debug(f"Error in signal handler: {e}")
+        def named(name):
+            if name:
+                resolved(name)
+            else:
+                self._get_property(connection, sender_name, root,
+                                   "org.a11y.atspi.Application", "ToolkitName", request, resolved)
+
+        self._get_property(connection, sender_name, root,
+                           "org.a11y.atspi.Accessible", "Name", request, named)
 
     @log_function_calls
     def _run(self, callback):
@@ -191,6 +190,10 @@ class ActiveWindowManager():
     def _stop(self):
 
         """Stop the active window manager."""
+        self._focus_generation += 1
+        if self._focus_request is not None:
+            self._focus_request.cancel()
+            self._focus_request = None
         if self.app:
             self.app.logger.info("active_window_manager (AT-SPI) stopped")
         
@@ -211,4 +214,4 @@ class ActiveWindowManager():
 
         """This method is called when the active window changes."""
         if self.callback:
-            GLib.idle_add(self.callback, new_state['title'])
+            self.callback(new_state['title'])
